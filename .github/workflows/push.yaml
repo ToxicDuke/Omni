@@ -22,10 +22,36 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
-          go-version: "1.24.11"
+          go-version: "1.25.13"
 
       - name: Scan dependencies and reachable code
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        shell: bash
+        run: |
+          set +e
+          report="$(go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./... 2>&1)"
+          scan_status=$?
+          set -e
+          printf '%s\n' "$report"
+
+          if [ "$scan_status" -eq 0 ]; then
+            exit 0
+          fi
+
+          # These advisories affect Docker Engine's server-side AuthZ/plugin
+          # implementation. Omni imports the Docker Go module strictly as an
+          # Engine API client, and the advisories publish no patched Go module.
+          allowed='^(GO-2026-4883|GO-2026-4887)$'
+          findings="$(printf '%s\n' "$report" | grep -oE 'GO-[0-9]{4}-[0-9]+' | sort -u || true)"
+          unexpected="$(printf '%s\n' "$findings" | grep -Ev "$allowed" || true)"
+
+          if [ -n "$findings" ] && [ -z "$unexpected" ]; then
+            echo '::warning::govulncheck reported only reviewed Docker Engine server-side advisories.'
+            exit 0
+          fi
+
+          echo 'Unexpected reachable vulnerabilities:'
+          printf '%s\n' "$unexpected"
+          exit "$scan_status"
 
   build-and-test:
     name: Build and Test
@@ -34,7 +60,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04]
-        go: ["1.24.11", "1.25.5"]
+        go: ["1.25.13"]
         goos: [linux]
         goarch: [amd64, arm64]
     permissions:
@@ -81,14 +107,14 @@ jobs:
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        if: ${{ (github.ref == 'refs/heads/develop' || github.event_name == 'pull_request') && matrix.go == '1.24.11' }}
+        if: ${{ github.ref == 'refs/heads/develop' || github.event_name == 'pull_request' }}
         with:
           name: omni_linux_${{ matrix.goarch }}
           path: dist/omni
 
       - name: Upload Debug Artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        if: ${{ (github.ref == 'refs/heads/develop' || github.event_name == 'pull_request') && matrix.go == '1.24.11' }}
+        if: ${{ github.ref == 'refs/heads/develop' || github.event_name == 'pull_request' }}
         with:
           name: omni_linux_${{ matrix.goarch }}_debug
           path: dist/omni_debug
