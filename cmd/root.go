@@ -81,7 +81,7 @@ func init() {
 	rootCommand.Flags().Bool("pprof", false, "if the pprof profiler should be enabled. The profiler will bind to localhost:6060 by default")
 	rootCommand.Flags().Int("pprof-block-rate", 0, "enables block profile support, may have performance impacts")
 	rootCommand.Flags().Int("pprof-port", 6060, "If provided with --pprof, the port it will run on")
-	rootCommand.Flags().Bool("auto-tls", false, "pass in order to have wings generate and manage its own SSL certificates using Let's Encrypt")
+	rootCommand.Flags().Bool("auto-tls", false, "allow Omni to generate and manage its own SSL certificates using Let's Encrypt")
 	rootCommand.Flags().String("tls-hostname", "", "required with --auto-tls, the FQDN for the generated SSL certificate")
 	rootCommand.Flags().Bool("ignore-certificate-errors", false, "ignore certificate verification errors when executing API calls")
 
@@ -91,7 +91,7 @@ func init() {
 }
 
 func rootCmdRun(cmd *cobra.Command, _ []string) {
-	printLogo()
+	printOmniBanner()
 	log.Debug("running in debug mode")
 	log.WithField("config_file", configPath).Info("loading configuration from file")
 
@@ -108,11 +108,11 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	log.WithField("timezone", config.Get().System.Timezone).Info("configured Omni with system timezone")
 	if err := config.ConfigureDirectories(); err != nil {
-		log.WithField("error", err).Fatal("failed to configure system directories for pterodactyl")
+		log.WithField("error", err).Fatal("failed to configure Omni system directories")
 		return
 	}
 	if err := config.EnsurePterodactylUser(); err != nil {
-		log.WithField("error", err).Fatal("failed to create pterodactyl system user")
+		log.WithField("error", err).Fatal("failed to prepare the Omni service user")
 		return
 	}
 	if err := config.ConfigurePasswd(); err != nil {
@@ -157,6 +157,14 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		}),
 	)
 	pclient.Start(cmd.Context())
+	panelMetrics := pclient.Metrics(cmd.Context())
+	log.WithFields(log.Fields{
+		"active_endpoint": panelMetrics.ActiveEndpoint,
+		"endpoints":       len(panelMetrics.Endpoints),
+		"failover":        len(panelMetrics.Endpoints) > 1,
+		"outbox_depth":    panelMetrics.OutboxDepth,
+		"cached_servers":  panelMetrics.CachedServers,
+	}).Info("Omni Panel resilience layer is ready")
 
 	manager, err := server.NewManager(cmd.Context(), pclient)
 	if err != nil {
@@ -350,6 +358,15 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		TLSConfig: config.DefaultTLSConfig,
 	}
 
+	log.WithFields(log.Fields{
+		"version":        system.Version,
+		"servers":        len(manager.All()),
+		"active_panel":   pclient.Metrics(cmd.Context()).ActiveEndpoint,
+		"api_listener":   s.Addr,
+		"sftp_listener":  fmt.Sprintf("%s:%d", sys.Sftp.Address, sys.Sftp.Port),
+		"resilient_mode": len(endpoints) > 1,
+	}).Info("Omni is ready and accepting connections")
+
 	profile, _ := cmd.Flags().GetBool("pprof")
 	if profile {
 		if r, _ := cmd.Flags().GetInt("pprof-block-rate"); r > 0 {
@@ -435,10 +452,10 @@ func initLogging() {
 	if err := os.MkdirAll(path.Join(dir, "/install"), 0o700); err != nil {
 		log2.Fatalf("cmd/root: failed to create install directory path: %s", err)
 	}
-	p := filepath.Join(dir, "/wings.log")
+	p := filepath.Join(dir, "/omni.log")
 	w, err := logrotate.NewFile(p)
 	if err != nil {
-		log2.Fatalf("cmd/root: failed to create wings log: %s", err)
+		log2.Fatalf("cmd/root: failed to create Omni log: %s", err)
 	}
 	log.SetLevel(log.InfoLevel)
 	if config.Get().Debug {
@@ -448,21 +465,24 @@ func initLogging() {
 	log.WithField("path", p).Info("writing log files to disk")
 }
 
-// Prints the Omni logo and upstream attribution.
-func printLogo() {
+// printOmniBanner renders the user-facing startup identity. Keep it concise:
+// operational details continue in structured logs immediately afterwards.
+func printOmniBanner() {
 	fmt.Printf(colorstring.Color(`
-[blue][bold]OMNI[reset] — Mikasa Host resilient node agent [bold]%s[reset]
+[blue][bold]       ____  __  ____   ______
+      / __ \\/  |/  / | / /  _/
+     / / / / /|_/ /  |/ // /
+    / /_/ / /  / / /|  // /
+    \\____/_/  /_/_/ |_/___/[reset]
 
-Copyright © 2018 - %d Dane Everitt & Contributors
+[bold]        MIKASA HOST NODE AGENT[reset]
+[blue]       resilient by design[reset]
 
-Website:  https://mikasa.host
- Source:  https://github.com/ToxicDuke/Omni
-Upstream: https://github.com/pterodactyl/wings
-License:  https://github.com/ToxicDuke/Omni/blob/develop/LICENSE
+  Version       %s
+  Project       https://github.com/ToxicDuke/Omni
+  Platform      Pterodactyl-compatible
 
-This software is made available under the terms of the MIT license.
-The above copyright notice and this permission notice shall be included
-in all copies or substantial portions of the Software.%s`), system.Version, time.Now().Year(), "\n\n")
+[blue]  Initializing Omni... hold the line.[reset]%s`), system.Version, "\n\n")
 }
 
 func exitWithConfigurationNotice() {
