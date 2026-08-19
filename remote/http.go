@@ -38,28 +38,67 @@ type Client interface {
 }
 
 type client struct {
-	httpClient  *http.Client
-	baseUrl     string
-	mu          sync.RWMutex
-	tokenId     string
-	token       string
-	maxAttempts int
+	httpClient       *http.Client
+	baseUrl          string
+	mu               sync.RWMutex
+	tokenId          string
+	token            string
+	maxAttempts      int
+	endpoints        []Endpoint
+	active           int
+	failures         []int
+	failureThreshold int
+}
+
+// Endpoint is an equivalent Panel API entrance. Endpoints must already be in
+// preference order when passed to NewWithEndpoints.
+type Endpoint struct {
+	Name string
+	URL  string
 }
 
 // New returns a new HTTP request client that is used for making authenticated
 // requests to the Panel that this instance is running under.
 func New(base string, opts ...ClientOption) Client {
+	return NewWithEndpoints([]Endpoint{{Name: "legacy", URL: base}}, opts...)
+}
+
+// NewWithEndpoints returns a client that can move requests to the next Panel
+// entrance after consecutive endpoint failures. Only one endpoint is active at
+// a time and no request is delivered concurrently to multiple endpoints.
+func NewWithEndpoints(endpoints []Endpoint, opts ...ClientOption) Client {
+	if len(endpoints) == 0 {
+		panic("remote: at least one Panel endpoint is required")
+	}
+	clean := make([]Endpoint, len(endpoints))
+	for i, endpoint := range endpoints {
+		clean[i] = endpoint
+		clean[i].URL = strings.TrimSuffix(endpoint.URL, "/") + "/api/remote"
+	}
 	c := client{
-		baseUrl: strings.TrimSuffix(base, "/") + "/api/remote",
+		baseUrl: clean[0].URL,
 		httpClient: &http.Client{
 			Timeout: time.Second * 15,
 		},
-		maxAttempts: 0,
+		maxAttempts:      0,
+		endpoints:        clean,
+		failures:         make([]int, len(clean)),
+		failureThreshold: 3,
 	}
 	for _, opt := range opts {
 		opt(&c)
 	}
 	return &c
+}
+
+// WithFailureThreshold controls how many consecutive transport or server
+// failures are required before selecting the next endpoint.
+func WithFailureThreshold(threshold int) ClientOption {
+	return func(c *client) {
+		if threshold > 0 {
+			c.failureThreshold = threshold
+		}
+	}
 }
 
 // WithCredentials sets the credentials to use when making request to the remote
@@ -85,6 +124,42 @@ func (c *client) credentials() (string, string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.tokenId, c.token
+}
+
+func (c *client) activeEndpoint() Endpoint {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.endpoints) == 0 {
+		return Endpoint{Name: "legacy", URL: c.baseUrl}
+	}
+	return c.endpoints[c.active]
+}
+
+func (c *client) recordSuccess(index int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if index >= 0 && index < len(c.failures) {
+		c.failures[index] = 0
+	}
+}
+
+func (c *client) recordFailure(index int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if index < 0 || index >= len(c.failures) || index != c.active {
+		return
+	}
+	c.failures[index]++
+	if c.failures[index] >= c.failureThreshold && len(c.endpoints) > 1 {
+		previous := c.endpoints[c.active]
+		c.failures[c.active] = 0
+		c.active = (c.active + 1) % len(c.endpoints)
+		c.baseUrl = c.endpoints[c.active].URL
+		log.WithFields(log.Fields{
+			"from": previous.Name,
+			"to":   c.endpoints[c.active].Name,
+		}).Warn("switched active Panel endpoint after consecutive failures")
+	}
 }
 
 // WithHttpClient sets the underlying HTTP client instance to use when making
@@ -119,7 +194,11 @@ func (c *client) Post(ctx context.Context, path string, data interface{}) (*Resp
 // over this method when possible. It appends the path to the endpoint of the
 // client and adds the authentication token to the request.
 func (c *client) requestOnce(ctx context.Context, method, path string, body io.Reader, opts ...func(r *http.Request)) (*Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.baseUrl+path, body)
+	return c.requestOnceAgainst(ctx, c.activeEndpoint().URL, method, path, body, opts...)
+}
+
+func (c *client) requestOnceAgainst(ctx context.Context, baseURL, method, path string, body io.Reader, opts ...func(r *http.Request)) (*Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -163,11 +242,14 @@ func (c *client) request(ctx context.Context, method, path string, body *bytes.B
 				return backoff.Permanent(errors.Wrap(err, "http: failed to copy body buffer"))
 			}
 		}
-		r, err := c.requestOnce(ctx, method, path, &b, opts...)
+		endpoint := c.activeEndpoint()
+		endpointIndex := c.endpointIndex(endpoint.Name)
+		r, err := c.requestOnceAgainst(ctx, endpoint.URL, method, path, &b, opts...)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return backoff.Permanent(err)
+			if ctx.Err() != nil {
+				return backoff.Permanent(ctx.Err())
 			}
+			c.recordFailure(endpointIndex)
 			return errors.WrapIf(err, "http: request creation failed")
 		}
 		res = r
@@ -180,8 +262,10 @@ func (c *client) request(ctx context.Context, method, path string, body *bytes.B
 			if r.StatusCode >= 400 && r.StatusCode < 500 {
 				return backoff.Permanent(r.Error())
 			}
+			c.recordFailure(endpointIndex)
 			return r.Error()
 		}
+		c.recordSuccess(endpointIndex)
 		return nil
 	}, c.backoff(ctx))
 	if err != nil {
@@ -191,6 +275,17 @@ func (c *client) request(ctx context.Context, method, path string, body *bytes.B
 		return nil, err
 	}
 	return res, nil
+}
+
+func (c *client) endpointIndex(name string) int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for i := range c.endpoints {
+		if c.endpoints[i].Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // backoff returns an exponential backoff function for use with remote API

@@ -121,6 +121,25 @@ type RemoteQueryConfiguration struct {
 	BootServersPerPage int `default:"50" yaml:"boot_servers_per_page"`
 }
 
+// PanelEndpointConfiguration describes one equivalent entrance to the logical
+// Panel control plane. Lower priority values are preferred.
+type PanelEndpointConfiguration struct {
+	Name     string `yaml:"name"`
+	URL      string `yaml:"url"`
+	Priority int    `yaml:"priority"`
+}
+
+// PanelFailoverConfiguration controls selection of the active Panel endpoint.
+// Durations are expressed in seconds to match the existing remote query
+// configuration.
+type PanelFailoverConfiguration struct {
+	HealthCheckInterval int                          `default:"15" yaml:"health_check_interval"`
+	FailureThreshold    int                          `default:"3" yaml:"failure_threshold"`
+	RecoveryThreshold   int                          `default:"2" yaml:"recovery_threshold"`
+	SwitchCooldown      int                          `default:"30" yaml:"switch_cooldown"`
+	Endpoints           []PanelEndpointConfiguration `yaml:"endpoints"`
+}
+
 // SystemConfiguration defines basic system configuration settings.
 type SystemConfiguration struct {
 	// The root directory where all of the pterodactyl data is stored at.
@@ -357,8 +376,9 @@ type Configuration struct {
 
 	// The location where the panel is running that this daemon should connect to
 	// to collect data and send events.
-	PanelLocation string                   `json:"-" yaml:"remote"`
-	RemoteQuery   RemoteQueryConfiguration `json:"remote_query" yaml:"remote_query"`
+	PanelLocation string                     `json:"-" yaml:"remote"`
+	RemoteQuery   RemoteQueryConfiguration   `json:"remote_query" yaml:"remote_query"`
+	PanelFailover PanelFailoverConfiguration `json:"-" yaml:"remotes"`
 
 	// AllowedMounts is a list of allowed host-system mount points.
 	// This is required to have the "Server Mounts" feature work properly.

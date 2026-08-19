@@ -44,14 +44,14 @@ var (
 )
 
 var rootCommand = &cobra.Command{
-	Use:   "wings",
-	Short: "Runs the API server allowing programmatic control of game servers for Pterodactyl Panel.",
+	Use:   "omni",
+	Short: "Runs the resilient Mikasa Host game-server node agent.",
 	PreRun: func(cmd *cobra.Command, args []string) {
 		initConfig()
 		initLogging()
 		if tls, _ := cmd.Flags().GetBool("auto-tls"); tls {
 			if host, _ := cmd.Flags().GetString("tls-hostname"); host == "" {
-				fmt.Println("A TLS hostname must be provided when running wings with automatic TLS, e.g.:\n\n    ./wings --auto-tls --tls-hostname my.example.com")
+				fmt.Println("A TLS hostname must be provided when running Omni with automatic TLS, e.g.:\n\n    ./omni --auto-tls --tls-hostname my.example.com")
 				os.Exit(1)
 			}
 		}
@@ -63,7 +63,7 @@ var versionCommand = &cobra.Command{
 	Use:   "version",
 	Short: "Prints the current executable version and exits.",
 	Run: func(cmd *cobra.Command, _ []string) {
-		fmt.Printf("wings v%s\nCopyright © 2018 - %d Dane Everitt & Contributors\n", system.Version, time.Now().Year())
+		fmt.Printf("omni v%s\nBased on Pterodactyl Wings, copyright © 2018 - %d Dane Everitt & Contributors\n", system.Version, time.Now().Year())
 	},
 }
 
@@ -75,7 +75,7 @@ func Execute() {
 
 func init() {
 	rootCommand.PersistentFlags().StringVar(&configPath, "config", config.DefaultLocation, "set the location for the configuration file")
-	rootCommand.PersistentFlags().BoolVar(&debug, "debug", false, "pass in order to run wings in debug mode")
+	rootCommand.PersistentFlags().BoolVar(&debug, "debug", false, "pass in order to run Omni in debug mode")
 
 	// Flags specifically used when running the API.
 	rootCommand.Flags().Bool("pprof", false, "if the pprof profiler should be enabled. The profiler will bind to localhost:6060 by default")
@@ -129,12 +129,23 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		return
 	}
 
-	t := config.Get().Token
-	pclient := remote.New(
-		config.Get().PanelLocation,
+	cfg := config.Get()
+	t := cfg.Token
+	configuredEndpoints, err := cfg.PanelEndpoints()
+	if err != nil {
+		log.WithField("error", err).Fatal("failed to configure Panel endpoints")
+		return
+	}
+	endpoints := make([]remote.Endpoint, len(configuredEndpoints))
+	for i, endpoint := range configuredEndpoints {
+		endpoints[i] = remote.Endpoint{Name: endpoint.Name, URL: endpoint.URL}
+	}
+	pclient := remote.NewWithEndpoints(
+		endpoints,
 		remote.WithCredentials(t.ID, t.Token),
+		remote.WithFailureThreshold(cfg.PanelFailover.FailureThreshold),
 		remote.WithHttpClient(&http.Client{
-			Timeout: time.Second * time.Duration(config.Get().RemoteQuery.Timeout),
+			Timeout: time.Second * time.Duration(cfg.RemoteQuery.Timeout),
 		}),
 	)
 
@@ -433,21 +444,17 @@ func initLogging() {
 	log.WithField("path", p).Info("writing log files to disk")
 }
 
-// Prints the wings logo, nothing special here!
+// Prints the Omni logo and upstream attribution.
 func printLogo() {
 	fmt.Printf(colorstring.Color(`
-                     ____
-__ [blue][bold]Pterodactyl[reset] _____/___/_______ _______ ______
-\_____\    \/\/    /   /       /  __   /   ___/
-   \___\          /   /   /   /  /_/  /___   /
-        \___/\___/___/___/___/___    /______/
-                            /_______/ [bold]%s[reset]
+[blue][bold]OMNI[reset] — Mikasa Host resilient node agent [bold]%s[reset]
 
 Copyright © 2018 - %d Dane Everitt & Contributors
 
-Website:  https://pterodactyl.io
- Source:  https://github.com/pterodactyl/wings
-License:  https://github.com/pterodactyl/wings/blob/develop/LICENSE
+Website:  https://mikasa.host
+ Source:  https://github.com/ToxicDuke/Omni
+Upstream: https://github.com/pterodactyl/wings
+License:  https://github.com/ToxicDuke/Omni/blob/develop/LICENSE
 
 This software is made available under the terms of the MIT license.
 The above copyright notice and this permission notice shall be included

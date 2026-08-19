@@ -114,3 +114,57 @@ func TestPost(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, r)
 }
+
+func TestRequestFailsOverToNextEndpoint(t *testing.T) {
+	primaryCalls := 0
+	primary := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		primaryCalls++
+		rw.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer primary.Close()
+
+	secondaryCalls := 0
+	secondary := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		secondaryCalls++
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer secondary.Close()
+
+	c := NewWithEndpoints([]Endpoint{
+		{Name: "primary", URL: primary.URL},
+		{Name: "secondary", URL: secondary.URL},
+	}, WithHttpClient(primary.Client()), WithFailureThreshold(1)).(*client)
+	c.maxAttempts = 1
+
+	response, err := c.Get(context.Background(), "/test", nil)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, response.StatusCode)
+	assert.Equal(t, 1, primaryCalls)
+	assert.Equal(t, 1, secondaryCalls)
+	assert.Equal(t, "secondary", c.activeEndpoint().Name)
+}
+
+func TestRequestDoesNotFailOverOnClientError(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		rw.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer primary.Close()
+
+	secondaryCalls := 0
+	secondary := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		secondaryCalls++
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer secondary.Close()
+
+	c := NewWithEndpoints([]Endpoint{
+		{Name: "primary", URL: primary.URL},
+		{Name: "secondary", URL: secondary.URL},
+	}, WithHttpClient(primary.Client()), WithFailureThreshold(1)).(*client)
+	c.maxAttempts = 1
+
+	_, err := c.Get(context.Background(), "/test", nil)
+	assert.Error(t, err)
+	assert.Equal(t, 0, secondaryCalls)
+	assert.Equal(t, "primary", c.activeEndpoint().Name)
+}
