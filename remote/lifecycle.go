@@ -50,6 +50,10 @@ func (c *client) restoreActiveEndpoint(ctx context.Context) {
 		}
 	}
 	log.WithField("endpoint", name).Warn("persisted Panel endpoint is no longer configured")
+	initial := c.endpoints[0].Name
+	if err := c.store.SaveEndpointSwitch(ctx, name, initial, "configured-endpoint-removed"); err != nil {
+		log.WithError(err).Error("failed to replace removed persisted Panel endpoint")
+	}
 }
 
 func (c *client) runHealthChecks(ctx context.Context) {
@@ -161,11 +165,11 @@ func (c *client) replayOutbox(ctx context.Context) {
 
 func (c *client) Metrics(ctx context.Context) Metrics {
 	c.mu.RLock()
-	metrics := Metrics{ActiveEndpoint: c.endpoints[c.active].Name, Switches: c.switches}
+	metrics := Metrics{ActiveEndpoint: c.endpoints[c.active].Name, ActivePriority: c.endpoints[c.active].Priority, Switches: c.switches}
 	metrics.Endpoints = make([]EndpointMetrics, len(c.endpoints))
 	for i, endpoint := range c.endpoints {
 		metrics.Endpoints[i] = EndpointMetrics{
-			Name: endpoint.Name, Healthy: !c.unhealthy[i],
+			Name: endpoint.Name, Priority: endpoint.Priority, Healthy: !c.unhealthy[i],
 			ConsecutiveFailures: c.failures[i], ConsecutiveSuccesses: c.successes[i],
 		}
 	}
@@ -177,12 +181,14 @@ func (c *client) Metrics(ctx context.Context) Metrics {
 		metrics.OutboxDepth = count
 		if !oldest.IsZero() {
 			metrics.OldestOutboxAt = &oldest
+			metrics.OldestOutboxAgeSeconds = max(0, int64(time.Since(oldest).Seconds()))
 		}
 	}
 	if count, oldest, err := c.store.CacheStats(ctx); err == nil {
 		metrics.CachedServers = count
 		if !oldest.IsZero() {
 			metrics.OldestCacheAt = &oldest
+			metrics.OldestCacheAgeSeconds = max(0, int64(time.Since(oldest).Seconds()))
 		}
 	}
 	if switches, err := c.store.RecentEndpointSwitches(ctx, 20); err == nil {
@@ -190,6 +196,9 @@ func (c *client) Metrics(ctx context.Context) Metrics {
 		for i, item := range switches {
 			metrics.RecentSwitches[i] = SwitchRecord{From: item.From, To: item.To, Reason: item.Reason, CreatedAt: item.CreatedAt}
 		}
+	}
+	if count, err := c.store.EndpointSwitchCount(ctx); err == nil {
+		metrics.Switches = uint64(count)
 	}
 	return metrics
 }

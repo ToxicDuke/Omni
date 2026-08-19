@@ -45,13 +45,26 @@ func TestPanelEndpointsPriorityOrder(t *testing.T) {
 }
 
 func TestPanelEndpointsRejectInvalidConfiguration(t *testing.T) {
+	invalidURL := validPanelFailover()
+	invalidURL.Endpoints = []PanelEndpointConfiguration{{Name: "ru", URL: "not-a-url"}}
+	duplicateName := validPanelFailover()
+	duplicateName.Endpoints = []PanelEndpointConfiguration{
+		{Name: "same", URL: "https://one.example.com"},
+		{Name: "same", URL: "https://two.example.com"},
+	}
+	duplicateURL := validPanelFailover()
+	duplicateURL.Endpoints = []PanelEndpointConfiguration{
+		{Name: "one", URL: "https://same.example.com/"},
+		{Name: "two", URL: "https://same.example.com"},
+	}
+	credentialsInURL := validPanelFailover()
+	credentialsInURL.Endpoints = []PanelEndpointConfiguration{{Name: "unsafe", URL: "https://user:password@panel.example.com"}}
 	tests := []Configuration{
 		{},
-		{PanelFailover: PanelFailoverConfiguration{Endpoints: []PanelEndpointConfiguration{{Name: "ru", URL: "not-a-url"}}}},
-		{PanelFailover: PanelFailoverConfiguration{Endpoints: []PanelEndpointConfiguration{
-			{Name: "same", URL: "https://one.example.com"},
-			{Name: "same", URL: "https://two.example.com"},
-		}}},
+		{PanelFailover: invalidURL},
+		{PanelFailover: duplicateName},
+		{PanelFailover: duplicateURL},
+		{PanelFailover: credentialsInURL},
 	}
 	for _, c := range tests {
 		if _, err := c.PanelEndpoints(); err == nil {

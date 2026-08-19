@@ -13,6 +13,7 @@ type stateStore interface {
 	LoadActiveEndpoint(context.Context) (string, error)
 	SaveEndpointSwitch(context.Context, string, string, string) error
 	RecentEndpointSwitches(context.Context, int) ([]models.PanelEndpointSwitch, error)
+	EndpointSwitchCount(context.Context) (int64, error)
 	SaveServerConfiguration(context.Context, string, []byte) error
 	LoadServerConfiguration(context.Context, string) ([]byte, time.Time, error)
 	LoadAllServerConfigurations(context.Context) ([]models.ServerConfigurationCache, error)
@@ -55,6 +56,12 @@ func (s *gormStateStore) RecentEndpointSwitches(ctx context.Context, limit int) 
 	return switches, err
 }
 
+func (s *gormStateStore) EndpointSwitchCount(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&models.PanelEndpointSwitch{}).Where("from_endpoint <> ?", "").Count(&count).Error
+	return count, err
+}
+
 func (s *gormStateStore) SaveServerConfiguration(ctx context.Context, uuid string, payload []byte) error {
 	entry := models.ServerConfigurationCache{UUID: uuid, Payload: payload, UpdatedAt: time.Now().UTC()}
 	return s.db.WithContext(ctx).Save(&entry).Error
@@ -90,8 +97,16 @@ func (s *gormStateStore) Enqueue(ctx context.Context, kind, method, path string,
 
 func (s *gormStateStore) DueOutbox(ctx context.Context, limit int) ([]models.PanelEventOutbox, error) {
 	var events []models.PanelEventOutbox
-	err := s.db.WithContext(ctx).Where("next_attempt <= ?", time.Now().UTC()).Order("id ASC").Limit(limit).Find(&events).Error
-	return events, err
+	err := s.db.WithContext(ctx).Order("id ASC").Limit(limit).Find(&events).Error
+	if err != nil || len(events) == 0 {
+		return events, err
+	}
+	// Never allow a newer event to overtake the head of the queue while it is
+	// waiting for its retry window.
+	if events[0].NextAttempt.After(time.Now().UTC()) {
+		return nil, nil
+	}
+	return events, nil
 }
 
 func (s *gormStateStore) MarkOutboxDelivered(ctx context.Context, id uint) error {

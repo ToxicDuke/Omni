@@ -24,6 +24,15 @@ func (s *memoryStateStore) SaveEndpointSwitch(_ context.Context, from, to, reaso
 func (s *memoryStateStore) RecentEndpointSwitches(context.Context, int) ([]models.PanelEndpointSwitch, error) {
 	return append([]models.PanelEndpointSwitch(nil), s.switches...), nil
 }
+func (s *memoryStateStore) EndpointSwitchCount(context.Context) (int64, error) {
+	var count int64
+	for _, item := range s.switches {
+		if item.From != "" {
+			count++
+		}
+	}
+	return count, nil
+}
 func (s *memoryStateStore) SaveServerConfiguration(_ context.Context, uuid string, payload []byte) error {
 	if s.configs == nil {
 		s.configs = map[string][]byte{}

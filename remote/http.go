@@ -47,14 +47,17 @@ type LifecycleClient interface {
 
 // Metrics is a point-in-time view of Omni's Panel connectivity.
 type Metrics struct {
-	ActiveEndpoint string            `json:"active_endpoint"`
-	Endpoints      []EndpointMetrics `json:"endpoints"`
-	Switches       uint64            `json:"switches"`
-	OutboxDepth    int64             `json:"outbox_depth"`
-	OldestOutboxAt *time.Time        `json:"oldest_outbox_at,omitempty"`
-	CachedServers  int64             `json:"cached_servers"`
-	OldestCacheAt  *time.Time        `json:"oldest_cache_at,omitempty"`
-	RecentSwitches []SwitchRecord    `json:"recent_switches"`
+	ActiveEndpoint         string            `json:"active_endpoint"`
+	ActivePriority         int               `json:"active_priority"`
+	Endpoints              []EndpointMetrics `json:"endpoints"`
+	Switches               uint64            `json:"switches"`
+	OutboxDepth            int64             `json:"outbox_depth"`
+	OldestOutboxAt         *time.Time        `json:"oldest_outbox_at,omitempty"`
+	OldestOutboxAgeSeconds int64             `json:"oldest_outbox_age_seconds"`
+	CachedServers          int64             `json:"cached_servers"`
+	OldestCacheAt          *time.Time        `json:"oldest_cache_at,omitempty"`
+	OldestCacheAgeSeconds  int64             `json:"oldest_cache_age_seconds"`
+	RecentSwitches         []SwitchRecord    `json:"recent_switches"`
 }
 
 type SwitchRecord struct {
@@ -66,6 +69,7 @@ type SwitchRecord struct {
 
 type EndpointMetrics struct {
 	Name                 string `json:"name"`
+	Priority             int    `json:"priority"`
 	Healthy              bool   `json:"healthy"`
 	ConsecutiveFailures  int    `json:"consecutive_failures"`
 	ConsecutiveSuccesses int    `json:"consecutive_successes"`
@@ -96,8 +100,9 @@ type client struct {
 // Endpoint is an equivalent Panel API entrance. Endpoints must already be in
 // preference order when passed to NewWithEndpoints.
 type Endpoint struct {
-	Name string
-	URL  string
+	Name     string
+	URL      string
+	Priority int
 }
 
 // New returns a new HTTP request client that is used for making authenticated

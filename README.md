@@ -34,7 +34,9 @@ managed regional replica, independent Redis caches per Panel region, and a
 separate highly available SSO service.
 
 See [docs/architecture/panel-failover-mvp.md](docs/architecture/panel-failover-mvp.md)
-for the architecture and failure semantics.
+for the architecture and failure semantics. Production rollout and recovery
+steps are documented in
+[docs/operations/panel-failover.md](docs/operations/panel-failover.md).
 
 ## Upstream and branches
 

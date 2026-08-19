@@ -138,7 +138,7 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	}
 	endpoints := make([]remote.Endpoint, len(configuredEndpoints))
 	for i, endpoint := range configuredEndpoints {
-		endpoints[i] = remote.Endpoint{Name: endpoint.Name, URL: endpoint.URL}
+		endpoints[i] = remote.Endpoint{Name: endpoint.Name, URL: endpoint.URL, Priority: endpoint.Priority}
 	}
 	if err := database.Initialize(); err != nil {
 		log.WithField("error", err).Fatal("failed to initialize database")

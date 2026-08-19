@@ -63,11 +63,9 @@ func (c *client) GetServers(ctx context.Context, limit int) ([]RawServerData, er
 // things in a bad state within the Panel. This API call is executed once Wings
 // has fully booted all the servers.
 func (c *client) ResetServersState(ctx context.Context) error {
-	res, err := c.Post(ctx, "/servers/reset", nil)
-	if err != nil {
+	if err := c.postEvent(ctx, "reset-server-states", "/servers/reset", nil); err != nil {
 		return errors.WrapIf(err, "remote: failed to reset server state on Panel")
 	}
-	_ = res.Body.Close()
 	return nil
 }
 
@@ -212,7 +210,9 @@ func (c *client) cacheServers(ctx context.Context, servers []RawServerData) {
 		}
 		payload, err := json.Marshal(configuration)
 		if err == nil {
-			_ = c.store.SaveServerConfiguration(ctx, server.Uuid, payload)
+			if err := c.store.SaveServerConfiguration(ctx, server.Uuid, payload); err != nil {
+				log.WithError(err).WithField("server", server.Uuid).Error("failed to cache server configuration from Panel snapshot")
+			}
 		}
 	}
 	if err := c.store.PruneServerConfigurations(ctx, uuids); err != nil {

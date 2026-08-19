@@ -113,6 +113,9 @@ func diagnosticsCmdRun(*cobra.Command, []string) {
 	}
 	cfg := config.Get()
 	fmt.Fprintln(output, "      Panel Location:", redact(cfg.PanelLocation))
+	for _, endpoint := range cfg.PanelFailover.Endpoints {
+		fmt.Fprintf(output, "      Panel Endpoint: %s (%s)\n", endpoint.Name, redact(endpoint.URL))
+	}
 	fmt.Fprintln(output, "")
 	fmt.Fprintln(output, "  Internal Webserver:", redact(cfg.Api.Host), ":", cfg.Api.Port)
 	fmt.Fprintln(output, "         SSL Enabled:", cfg.Api.Ssl.Enabled)
@@ -183,11 +186,19 @@ func diagnosticsCmdRun(*cobra.Command, []string) {
 	if !diagnosticsArgs.IncludeEndpoints {
 		s := output.String()
 		output.Reset()
-		s = strings.ReplaceAll(s, cfg.PanelLocation, "{redacted}")
-		s = strings.ReplaceAll(s, cfg.Api.Host, "{redacted}")
-		s = strings.ReplaceAll(s, cfg.Api.Ssl.CertificateFile, "{redacted}")
-		s = strings.ReplaceAll(s, cfg.Api.Ssl.KeyFile, "{redacted}")
-		s = strings.ReplaceAll(s, cfg.System.Sftp.Address, "{redacted}")
+		replace := func(value string) {
+			if value != "" {
+				s = strings.ReplaceAll(s, value, "{redacted}")
+			}
+		}
+		replace(cfg.PanelLocation)
+		for _, endpoint := range cfg.PanelFailover.Endpoints {
+			replace(endpoint.URL)
+		}
+		replace(cfg.Api.Host)
+		replace(cfg.Api.Ssl.CertificateFile)
+		replace(cfg.Api.Ssl.KeyFile)
+		replace(cfg.System.Sftp.Address)
 		output.WriteString(s)
 	}
 

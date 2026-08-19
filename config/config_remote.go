@@ -25,6 +25,7 @@ func (c *Configuration) PanelEndpoints() ([]PanelEndpointConfiguration, error) {
 	}
 
 	names := make(map[string]struct{}, len(endpoints))
+	urls := make(map[string]struct{}, len(endpoints))
 	for i := range endpoints {
 		endpoints[i].Name = strings.TrimSpace(endpoints[i].Name)
 		endpoints[i].URL = strings.TrimRight(strings.TrimSpace(endpoints[i].URL), "/")
@@ -37,9 +38,13 @@ func (c *Configuration) PanelEndpoints() ([]PanelEndpointConfiguration, error) {
 		names[endpoints[i].Name] = struct{}{}
 
 		u, err := url.ParseRequestURI(endpoints[i].URL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return nil, fmt.Errorf("config: Panel endpoint %q has an invalid URL", endpoints[i].Name)
 		}
+		if _, ok := urls[endpoints[i].URL]; ok {
+			return nil, fmt.Errorf("config: duplicate Panel endpoint URL %q", endpoints[i].URL)
+		}
+		urls[endpoints[i].URL] = struct{}{}
 	}
 
 	sort.SliceStable(endpoints, func(i, j int) bool {
