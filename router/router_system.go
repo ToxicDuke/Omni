@@ -11,11 +11,21 @@ import (
 	"github.com/pterodactyl/wings/router/tokens"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/router/middleware"
 	"github.com/pterodactyl/wings/server"
 	"github.com/pterodactyl/wings/server/installer"
 	"github.com/pterodactyl/wings/system"
 )
+
+func getOmniInformation(c *gin.Context) {
+	client, ok := middleware.ExtractApiClient(c).(remote.LifecycleClient)
+	if !ok {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "resilient Panel client is not enabled"})
+		return
+	}
+	c.JSON(http.StatusOK, client.Metrics(c.Request.Context()))
+}
 
 // Returns information about the system that wings is running on.
 func getSystemInformation(c *gin.Context) {

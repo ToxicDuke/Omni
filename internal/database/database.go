@@ -1,6 +1,7 @@
 package database
 
 import (
+	"os"
 	"path/filepath"
 	"time"
 
@@ -32,6 +33,9 @@ func Initialize() error {
 	if err != nil {
 		return errors.Wrap(err, "database: could not open database file")
 	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		return errors.Wrap(err, "database: could not restrict database permissions")
+	}
 	db = instance
 	if sql, err := db.DB(); err != nil {
 		return errors.WithStack(err)
@@ -39,13 +43,21 @@ func Initialize() error {
 		sql.SetMaxOpenConns(1)
 		sql.SetConnMaxLifetime(time.Hour)
 	}
-	if tx := db.Exec("PRAGMA synchronous = OFF"); tx.Error != nil {
+	// Omni relies on SQLite for its event outbox and last-known-good state. WAL
+	// with full synchronization favors recoverability over maximum write speed.
+	if tx := db.Exec("PRAGMA journal_mode = WAL"); tx.Error != nil {
 		return errors.WithStack(tx.Error)
 	}
-	if tx := db.Exec("PRAGMA journal_mode = MEMORY"); tx.Error != nil {
+	if tx := db.Exec("PRAGMA synchronous = FULL"); tx.Error != nil {
 		return errors.WithStack(tx.Error)
 	}
-	if err := db.AutoMigrate(&models.Activity{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.Activity{},
+		&models.PanelEndpointState{},
+		&models.PanelEndpointSwitch{},
+		&models.ServerConfigurationCache{},
+		&models.PanelEventOutbox{},
+	); err != nil {
 		return errors.WithStack(err)
 	}
 	return nil

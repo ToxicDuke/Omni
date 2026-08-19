@@ -37,17 +37,60 @@ type Client interface {
 	SetCredentials(id, token string)
 }
 
+// LifecycleClient is a resilient Client with background health and outbox
+// processing plus an observable state snapshot.
+type LifecycleClient interface {
+	Client
+	Start(context.Context)
+	Metrics(context.Context) Metrics
+}
+
+// Metrics is a point-in-time view of Omni's Panel connectivity.
+type Metrics struct {
+	ActiveEndpoint string            `json:"active_endpoint"`
+	Endpoints      []EndpointMetrics `json:"endpoints"`
+	Switches       uint64            `json:"switches"`
+	OutboxDepth    int64             `json:"outbox_depth"`
+	OldestOutboxAt *time.Time        `json:"oldest_outbox_at,omitempty"`
+	CachedServers  int64             `json:"cached_servers"`
+	OldestCacheAt  *time.Time        `json:"oldest_cache_at,omitempty"`
+	RecentSwitches []SwitchRecord    `json:"recent_switches"`
+}
+
+type SwitchRecord struct {
+	From      string    `json:"from"`
+	To        string    `json:"to"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type EndpointMetrics struct {
+	Name                 string `json:"name"`
+	Healthy              bool   `json:"healthy"`
+	ConsecutiveFailures  int    `json:"consecutive_failures"`
+	ConsecutiveSuccesses int    `json:"consecutive_successes"`
+}
+
 type client struct {
-	httpClient       *http.Client
-	baseUrl          string
-	mu               sync.RWMutex
-	tokenId          string
-	token            string
-	maxAttempts      int
-	endpoints        []Endpoint
-	active           int
-	failures         []int
-	failureThreshold int
+	httpClient        *http.Client
+	baseUrl           string
+	mu                sync.RWMutex
+	tokenId           string
+	token             string
+	maxAttempts       int
+	endpoints         []Endpoint
+	active            int
+	failures          []int
+	successes         []int
+	unhealthy         []bool
+	failureThreshold  int
+	recoveryThreshold int
+	healthInterval    time.Duration
+	switchCooldown    time.Duration
+	lastSwitch        time.Time
+	switches          uint64
+	store             stateStore
+	startOnce         sync.Once
 }
 
 // Endpoint is an equivalent Panel API entrance. Endpoints must already be in
@@ -66,7 +109,7 @@ func New(base string, opts ...ClientOption) Client {
 // NewWithEndpoints returns a client that can move requests to the next Panel
 // entrance after consecutive endpoint failures. Only one endpoint is active at
 // a time and no request is delivered concurrently to multiple endpoints.
-func NewWithEndpoints(endpoints []Endpoint, opts ...ClientOption) Client {
+func NewWithEndpoints(endpoints []Endpoint, opts ...ClientOption) LifecycleClient {
 	if len(endpoints) == 0 {
 		panic("remote: at least one Panel endpoint is required")
 	}
@@ -80,10 +123,15 @@ func NewWithEndpoints(endpoints []Endpoint, opts ...ClientOption) Client {
 		httpClient: &http.Client{
 			Timeout: time.Second * 15,
 		},
-		maxAttempts:      0,
-		endpoints:        clean,
-		failures:         make([]int, len(clean)),
-		failureThreshold: 3,
+		maxAttempts:       0,
+		endpoints:         clean,
+		failures:          make([]int, len(clean)),
+		successes:         make([]int, len(clean)),
+		unhealthy:         make([]bool, len(clean)),
+		failureThreshold:  3,
+		recoveryThreshold: 2,
+		healthInterval:    15 * time.Second,
+		switchCooldown:    30 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(&c)
@@ -99,6 +147,34 @@ func WithFailureThreshold(threshold int) ClientOption {
 			c.failureThreshold = threshold
 		}
 	}
+}
+
+func WithRecoveryThreshold(threshold int) ClientOption {
+	return func(c *client) {
+		if threshold > 0 {
+			c.recoveryThreshold = threshold
+		}
+	}
+}
+
+func WithHealthCheckInterval(interval time.Duration) ClientOption {
+	return func(c *client) {
+		if interval > 0 {
+			c.healthInterval = interval
+		}
+	}
+}
+
+func WithSwitchCooldown(cooldown time.Duration) ClientOption {
+	return func(c *client) {
+		if cooldown >= 0 {
+			c.switchCooldown = cooldown
+		}
+	}
+}
+
+func WithStateStore(store stateStore) ClientOption {
+	return func(c *client) { c.store = store }
 }
 
 // WithCredentials sets the credentials to use when making request to the remote
@@ -140,6 +216,7 @@ func (c *client) recordSuccess(index int) {
 	defer c.mu.Unlock()
 	if index >= 0 && index < len(c.failures) {
 		c.failures[index] = 0
+		c.successes[index]++
 	}
 }
 
@@ -150,16 +227,43 @@ func (c *client) recordFailure(index int) {
 		return
 	}
 	c.failures[index]++
+	c.successes[index] = 0
 	if c.failures[index] >= c.failureThreshold && len(c.endpoints) > 1 {
-		previous := c.endpoints[c.active]
-		c.failures[c.active] = 0
-		c.active = (c.active + 1) % len(c.endpoints)
-		c.baseUrl = c.endpoints[c.active].URL
-		log.WithFields(log.Fields{
-			"from": previous.Name,
-			"to":   c.endpoints[c.active].Name,
-		}).Warn("switched active Panel endpoint after consecutive failures")
+		c.unhealthy[index] = true
+		c.switchToNextLocked("failure-threshold")
 	}
+}
+
+func (c *client) switchToNextLocked(reason string) {
+	from := c.active
+	to := -1
+	for offset := 1; offset < len(c.endpoints); offset++ {
+		candidate := (from + offset) % len(c.endpoints)
+		if !c.unhealthy[candidate] {
+			to = candidate
+			break
+		}
+	}
+	if to == -1 || to == from {
+		return
+	}
+	c.switchLocked(to, reason)
+}
+
+func (c *client) switchLocked(to int, reason string) {
+	from := c.endpoints[c.active].Name
+	toName := c.endpoints[to].Name
+	if c.store != nil {
+		if err := c.store.SaveEndpointSwitch(context.Background(), from, toName, reason); err != nil {
+			log.WithError(err).Error("failed to persist Panel endpoint switch")
+			return
+		}
+	}
+	c.active = to
+	c.baseUrl = c.endpoints[to].URL
+	c.lastSwitch = time.Now().UTC()
+	c.switches++
+	log.WithFields(log.Fields{"from": from, "to": toName, "reason": reason}).Warn("switched active Panel endpoint")
 }
 
 // WithHttpClient sets the underlying HTTP client instance to use when making
@@ -204,7 +308,7 @@ func (c *client) requestOnceAgainst(ctx context.Context, baseURL, method, path s
 	}
 
 	tokenId, token := c.credentials()
-	req.Header.Set("User-Agent", fmt.Sprintf("Pterodactyl Wings/v%s (id:%s)", system.Version, tokenId))
+	req.Header.Set("User-Agent", fmt.Sprintf("Mikasa Host Omni/v%s (Pterodactyl-compatible; id:%s)", system.Version, tokenId))
 	req.Header.Set("Accept", "application/vnd.pterodactyl.v1+json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s.%s", tokenId, token))
@@ -217,7 +321,10 @@ func (c *client) requestOnceAgainst(ctx context.Context, baseURL, method, path s
 	debugLogRequest(req)
 
 	res, err := c.httpClient.Do(req)
-	return &Response{res}, err
+	if err != nil {
+		return nil, err
+	}
+	return &Response{res}, nil
 }
 
 // request executes an HTTP request against the Panel API. If there is an error

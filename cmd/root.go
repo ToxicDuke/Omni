@@ -106,7 +106,7 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.WithField("error", err).Fatal("failed to detect system timezone or use supplied configuration value")
 		return
 	}
-	log.WithField("timezone", config.Get().System.Timezone).Info("configured wings with system timezone")
+	log.WithField("timezone", config.Get().System.Timezone).Info("configured Omni with system timezone")
 	if err := config.ConfigureDirectories(); err != nil {
 		log.WithField("error", err).Fatal("failed to configure system directories for pterodactyl")
 		return
@@ -140,19 +140,23 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	for i, endpoint := range configuredEndpoints {
 		endpoints[i] = remote.Endpoint{Name: endpoint.Name, URL: endpoint.URL}
 	}
-	pclient := remote.NewWithEndpoints(
-		endpoints,
-		remote.WithCredentials(t.ID, t.Token),
-		remote.WithFailureThreshold(cfg.PanelFailover.FailureThreshold),
-		remote.WithHttpClient(&http.Client{
-			Timeout: time.Second * time.Duration(cfg.RemoteQuery.Timeout),
-		}),
-	)
-
 	if err := database.Initialize(); err != nil {
 		log.WithField("error", err).Fatal("failed to initialize database")
 		return
 	}
+	pclient := remote.NewWithEndpoints(
+		endpoints,
+		remote.WithCredentials(t.ID, t.Token),
+		remote.WithFailureThreshold(cfg.PanelFailover.FailureThreshold),
+		remote.WithRecoveryThreshold(cfg.PanelFailover.RecoveryThreshold),
+		remote.WithHealthCheckInterval(time.Second*time.Duration(cfg.PanelFailover.HealthCheckInterval)),
+		remote.WithSwitchCooldown(time.Second*time.Duration(cfg.PanelFailover.SwitchCooldown)),
+		remote.WithStateStore(remote.NewStateStore(database.Instance())),
+		remote.WithHttpClient(&http.Client{
+			Timeout: time.Second * time.Duration(cfg.RemoteQuery.Timeout),
+		}),
+	)
+	pclient.Start(cmd.Context())
 
 	manager, err := server.NewManager(cmd.Context(), pclient)
 	if err != nil {
@@ -465,7 +469,7 @@ func exitWithConfigurationNotice() {
 	fmt.Printf(colorstring.Color(`
 [_red_][white][bold]Error: Configuration File Not Found[reset]
 
-Wings was not able to locate your configuration file, and therefore is not
+Omni was not able to locate your configuration file, and therefore is not
 able to complete its boot process. Please ensure you have copied your instance
 configuration file into the default location below.
 

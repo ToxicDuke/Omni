@@ -10,6 +10,9 @@ import (
 // PanelEndpoints returns the configured Panel endpoints in deterministic
 // priority order. The legacy remote value is used when no endpoint list exists.
 func (c *Configuration) PanelEndpoints() ([]PanelEndpointConfiguration, error) {
+	if c.PanelFailover.FailureThreshold <= 0 || c.PanelFailover.RecoveryThreshold <= 0 || c.PanelFailover.HealthCheckInterval <= 0 || c.PanelFailover.SwitchCooldown < 0 {
+		return nil, fmt.Errorf("config: Panel failover thresholds and health interval must be positive and cooldown cannot be negative")
+	}
 	endpoints := append([]PanelEndpointConfiguration(nil), c.PanelFailover.Endpoints...)
 	if len(endpoints) == 0 && strings.TrimSpace(c.PanelLocation) != "" {
 		endpoints = []PanelEndpointConfiguration{{

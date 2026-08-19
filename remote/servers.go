@@ -2,9 +2,11 @@ package remote
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/pterodactyl/wings/internal/models"
 
@@ -25,7 +27,7 @@ const (
 func (c *client) GetServers(ctx context.Context, limit int) ([]RawServerData, error) {
 	servers, meta, err := c.getServersPaged(ctx, 0, limit)
 	if err != nil {
-		return nil, err
+		return c.cachedServers(ctx, err)
 	}
 
 	var mu sync.Mutex
@@ -45,9 +47,10 @@ func (c *client) GetServers(ctx context.Context, limit int) ([]RawServerData, er
 			})
 		}
 		if err := g.Wait(); err != nil {
-			return nil, err
+			return c.cachedServers(ctx, err)
 		}
 	}
+	c.cacheServers(ctx, servers)
 
 	return servers, nil
 }
@@ -69,15 +72,30 @@ func (c *client) ResetServersState(ctx context.Context) error {
 }
 
 func (c *client) GetServerConfiguration(ctx context.Context, uuid string) (ServerConfigurationResponse, error) {
-	var config ServerConfigurationResponse
+	var configuration ServerConfigurationResponse
 	res, err := c.Get(ctx, fmt.Sprintf("/servers/%s", uuid), nil)
 	if err != nil {
-		return config, err
+		if c.store != nil && isTransientPanelError(err) {
+			if payload, cachedAt, cacheErr := c.store.LoadServerConfiguration(ctx, uuid); cacheErr == nil {
+				if jsonErr := json.Unmarshal(payload, &configuration); jsonErr == nil {
+					log.WithFields(log.Fields{"server": uuid, "cached_at": cachedAt}).Warn("using cached server configuration")
+					return configuration, nil
+				}
+			}
+		}
+		return configuration, err
 	}
 	defer res.Body.Close()
 
-	err = res.BindJSON(&config)
-	return config, err
+	err = res.BindJSON(&configuration)
+	if err == nil && c.store != nil {
+		if payload, marshalErr := json.Marshal(configuration); marshalErr == nil {
+			if cacheErr := c.store.SaveServerConfiguration(ctx, uuid, payload); cacheErr != nil {
+				log.WithError(cacheErr).WithField("server", uuid).Error("failed to cache server configuration")
+			}
+		}
+	}
+	return configuration, err
 }
 
 func (c *client) GetInstallationScript(ctx context.Context, uuid string) (InstallationScript, error) {
@@ -93,21 +111,11 @@ func (c *client) GetInstallationScript(ctx context.Context, uuid string) (Instal
 }
 
 func (c *client) SetInstallationStatus(ctx context.Context, uuid string, data InstallStatusRequest) error {
-	resp, err := c.Post(ctx, fmt.Sprintf("/servers/%s/install", uuid), data)
-	if err != nil {
-		return err
-	}
-	_ = resp.Body.Close()
-	return nil
+	return c.postEvent(ctx, "installation-status", fmt.Sprintf("/servers/%s/install", uuid), data)
 }
 
 func (c *client) SetArchiveStatus(ctx context.Context, uuid string, successful bool) error {
-	resp, err := c.Post(ctx, fmt.Sprintf("/servers/%s/archive", uuid), d{"successful": successful})
-	if err != nil {
-		return err
-	}
-	_ = resp.Body.Close()
-	return nil
+	return c.postEvent(ctx, "archive-status", fmt.Sprintf("/servers/%s/archive", uuid), d{"successful": successful})
 }
 
 func (c *client) SetTransferStatus(ctx context.Context, uuid string, successful bool) error {
@@ -115,12 +123,7 @@ func (c *client) SetTransferStatus(ctx context.Context, uuid string, successful 
 	if successful {
 		state = "success"
 	}
-	resp, err := c.Post(ctx, fmt.Sprintf("/servers/%s/transfer/%s", uuid, state), nil)
-	if err != nil {
-		return err
-	}
-	_ = resp.Body.Close()
-	return nil
+	return c.postEvent(ctx, "transfer-status", fmt.Sprintf("/servers/%s/transfer/%s", uuid, state), nil)
 }
 
 // ValidateSftpCredentials makes a request to determine if the username and
@@ -160,24 +163,88 @@ func (c *client) GetBackupRemoteUploadURLs(ctx context.Context, backup string, s
 }
 
 func (c *client) SetBackupStatus(ctx context.Context, backup string, data BackupRequest) error {
-	resp, err := c.Post(ctx, fmt.Sprintf("/backups/%s", backup), data)
-	if err != nil {
-		return err
-	}
-	_ = resp.Body.Close()
-	return nil
+	return c.postEvent(ctx, "backup-status", fmt.Sprintf("/backups/%s", backup), data)
 }
 
 // SendRestorationStatus triggers a request to the Panel to notify it that a
 // restoration has been completed and the server should be marked as being
 // activated again.
 func (c *client) SendRestorationStatus(ctx context.Context, backup string, successful bool) error {
-	resp, err := c.Post(ctx, fmt.Sprintf("/backups/%s/restore", backup), d{"successful": successful})
+	return c.postEvent(ctx, "restoration-status", fmt.Sprintf("/backups/%s/restore", backup), d{"successful": successful})
+}
+
+func (c *client) postEvent(ctx context.Context, kind, path string, data interface{}) error {
+	payload, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-	_ = resp.Body.Close()
+	response, err := c.Post(ctx, path, data)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err == nil || c.store == nil || !isTransientPanelError(err) {
+		return err
+	}
+	queueCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if queueErr := c.store.Enqueue(queueCtx, kind, "POST", path, payload, err.Error()); queueErr != nil {
+		return errors.Wrap(queueErr, "remote: failed to queue undelivered Panel event")
+	}
+	log.WithFields(log.Fields{"kind": kind, "path": path}).Warn("queued undelivered Panel event")
 	return nil
+}
+
+func isTransientPanelError(err error) bool {
+	requestError := AsRequestError(err)
+	return requestError == nil || requestError.StatusCode() >= 500
+}
+
+func (c *client) cacheServers(ctx context.Context, servers []RawServerData) {
+	if c.store == nil {
+		return
+	}
+	uuids := make([]string, 0, len(servers))
+	for _, server := range servers {
+		uuids = append(uuids, server.Uuid)
+		configuration := ServerConfigurationResponse{Settings: server.Settings}
+		if err := json.Unmarshal(server.ProcessConfiguration, &configuration.ProcessConfiguration); err != nil {
+			continue
+		}
+		payload, err := json.Marshal(configuration)
+		if err == nil {
+			_ = c.store.SaveServerConfiguration(ctx, server.Uuid, payload)
+		}
+	}
+	if err := c.store.PruneServerConfigurations(ctx, uuids); err != nil {
+		log.WithError(err).Error("failed to prune stale server configurations")
+	}
+}
+
+func (c *client) cachedServers(ctx context.Context, cause error) ([]RawServerData, error) {
+	if c.store == nil || !isTransientPanelError(cause) {
+		return nil, cause
+	}
+	entries, err := c.store.LoadAllServerConfigurations(ctx)
+	if err != nil || len(entries) == 0 {
+		return nil, cause
+	}
+	servers := make([]RawServerData, 0, len(entries))
+	for _, entry := range entries {
+		var configuration ServerConfigurationResponse
+		if err := json.Unmarshal(entry.Payload, &configuration); err != nil || configuration.ProcessConfiguration == nil {
+			continue
+		}
+		process, err := json.Marshal(configuration.ProcessConfiguration)
+		if err != nil {
+			continue
+		}
+		servers = append(servers, RawServerData{Uuid: entry.UUID, Settings: configuration.Settings, ProcessConfiguration: process})
+	}
+	if len(servers) == 0 {
+		return nil, cause
+	}
+	log.WithField("total_configs", len(servers)).Warn("booting with cached server configurations")
+	return servers, nil
 }
 
 // SendActivityLogs sends activity logs back to the Panel for processing.
