@@ -60,6 +60,24 @@ go build ./...
 go test ./...
 ```
 
+## Docker
+
+The `develop` image is published for both amd64 and arm64 nodes. Existing
+Pterodactyl paths, the `pterodactyl` service user, the `wings0` Docker network,
+and the `WINGS_*` environment variables are intentionally retained so an
+existing node can move to Omni without migrating server data or permissions.
+
+```bash
+cp docker-compose.example.yml docker-compose.yml
+docker compose pull
+docker compose up -d
+docker compose logs -f omni
+```
+
+Before starting the container, keep the node configuration at
+`/etc/pterodactyl/config.yml`. Add the `remotes` section described above only
+when multiple equivalent Panel API endpoints are available.
+
 ## Upstream attribution
 
 Omni is a fork of [Pterodactyl Wings](https://github.com/pterodactyl/wings),

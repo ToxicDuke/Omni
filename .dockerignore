@@ -35,6 +35,8 @@
 # The built executable
 wings
 wings.exe
+omni
+omni.exe
 
 # IDE/Editor files (VS Code)
 /.vscode
