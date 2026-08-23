@@ -199,6 +199,11 @@ func (s *Server) Sync() error {
 	// Update the disk space limits for the server whenever the configuration for
 	// it changes.
 	s.fs.SetDiskLimit(s.DiskSpace())
+	// Keep the kernel quota in sync with the Panel before updating a running
+	// environment, so an allocation change applies immediately.
+	if err := s.applyProjectQuota(); err != nil {
+		return err
+	}
 
 	s.SyncWithEnvironment()
 
@@ -260,6 +265,11 @@ func (s *Server) CreateEnvironment() error {
 	if err := s.EnsureDataDirectoryExists(); err != nil {
 		return err
 	}
+	// Apply the kernel quota before Docker creates the bind mount. This makes
+	// the first write from /home/container subject to the Panel's disk limit.
+	if err := s.applyProjectQuota(); err != nil {
+		return err
+	}
 
 	cfg := config.Get()
 	if cfg.System.MachineID.Enable {
@@ -274,6 +284,22 @@ func (s *Server) CreateEnvironment() error {
 	}
 
 	return s.Environment.Create()
+}
+
+// applyProjectQuota mirrors the Panel disk limit into the host filesystem's
+// quota system for the directory Docker bind-mounts at /home/container.
+//
+// A normal Wings disk check is advisory for processes that write directly in
+// their container. This method is the enforcement boundary: when enabled, its
+// quota errors are logged and the established Omni limiter remains active, so
+// a missing host package or an unsupported filesystem cannot take down a node.
+// It is also called during Sync so Panel changes to the disk allocation take
+// effect without waiting for a container rebuild.
+func (s *Server) applyProjectQuota() error {
+	if err := system.NewProjectQuota().Set(s.fs.Path(), s.ID(), s.DiskSpace()); err != nil {
+		s.Log().WithField("error", err).Warn("kernel disk quota is unavailable; using the standard Omni disk limiter")
+	}
+	return nil
 }
 
 // Checks if the server is marked as being suspended or not on the system.
