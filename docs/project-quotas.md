@@ -43,3 +43,9 @@ XFS needs `xfs_quota` from `xfsprogs`. These are distribution packages, not
 Linux-kernel commands. Btrfs uses `btrfs` from `btrfs-progs`. If a required
 utility is absent, Omni logs the condition and uses the standard disk limiter.
 ZFS uses the `zfs` utility supplied by OpenZFS.
+
+For XFS, Omni passes the server directory to `xfs_quota` as the target
+filesystem path. This is required by `xfs_quota` to select the mount that owns
+the directory. Any diagnostic output emitted by the host utility is retained in
+Omni's warning log, so missing `prjquota`, permissions, or package issues are
+visible instead of appearing only as `exit status 1`.

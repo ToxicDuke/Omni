@@ -40,7 +40,10 @@ type ProjectQuota struct {
 // reported by Set as errors; they are never silently ignored.
 func NewProjectQuota() *ProjectQuota {
 	return &ProjectQuota{run: func(name string, args ...string) ([]byte, error) {
-		return exec.Command(name, args...).Output()
+		// Quota utilities send actionable configuration errors to stderr. Keep
+		// that output so the fallback warning tells an operator how to fix the
+		// node instead of only reporting a generic exit status.
+		return exec.Command(name, args...).CombinedOutput()
 	}}
 }
 
@@ -158,10 +161,25 @@ func (q *ProjectQuota) setXFS(path, projectID string, limit int64) error {
 	// limit, unlike bsoft which would permit temporary overages.
 	project := "project -s -p " + shellQuote(path) + " " + projectID
 	hardLimit := "limit -p bhard=" + strconv.FormatInt(limit, 10) + "b " + projectID
-	if _, err := q.run("xfs_quota", "-x", "-c", project, "-c", hardLimit); err != nil {
-		return fmt.Errorf("project quota: set XFS quota for %q: %w", path, err)
+	// xfs_quota requires a trailing mountpoint/path to select the target XFS
+	// filesystem. Without it, the commands have no current filesystem and the
+	// utility exits with status 1 before it can configure the project.
+	output, err := q.run("xfs_quota", "-x", "-c", project, "-c", hardLimit, path)
+	if err != nil {
+		return commandError("set XFS quota", path, err, output)
 	}
 	return nil
+}
+
+// commandError preserves an external tool's stderr/stdout in the returned
+// error. Utilities such as xfs_quota print missing-prjquota and permission
+// diagnostics there, which is essential when Omni chooses the safe fallback.
+func commandError(action, path string, err error, output []byte) error {
+	message := strings.TrimSpace(string(output))
+	if message == "" {
+		return fmt.Errorf("project quota: %s for %q: %w", action, path, err)
+	}
+	return fmt.Errorf("project quota: %s for %q: %w: %s", action, path, err, message)
 }
 
 // setBtrfs limits the qgroup associated with the server subvolume. Btrfs
