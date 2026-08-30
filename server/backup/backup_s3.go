@@ -153,7 +153,7 @@ func (s *S3Backup) generateRemoteRequest(ctx context.Context) ([]remote.BackupPa
 	} else if concurrency > 4 {
 		concurrency = 4
 	}
-	s.log().WithFields(map[string]interface{}{"parts": len(urls.Parts), "concurrency": concurrency}).Info("uploading S3 backup parts")
+	s.log().WithFields(log.Fields{"parts": len(urls.Parts), "concurrency": concurrency}).Info("uploading S3 backup parts")
 
 	g, uploadCtx := errgroup.WithContext(ctx)
 	semaphore := make(chan struct{}, concurrency)
