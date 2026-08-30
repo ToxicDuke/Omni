@@ -309,6 +309,11 @@ type Backups struct {
 	// Defaults to "best_speed" (level 1)
 	CompressionLevel string `default:"best_speed" yaml:"compression_level"`
 
+	// S3UploadConcurrency is the maximum number of multipart S3 upload parts
+	// that Wings sends concurrently. Values outside 1-4 are clamped at runtime.
+	// Defaults to 2 to improve throughput without saturating a node connection.
+	S3UploadConcurrency int `default:"2" yaml:"s3_upload_concurrency"`
+
 	// RestoreHostAllowlist allows backup restore downloads to connect to otherwise blocked
 	// private/internal destinations. Entries may be hostnames, IP addresses, or CIDR ranges.
 	RestoreHostAllowlist []string `yaml:"restore_host_allowlist"`

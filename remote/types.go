@@ -163,6 +163,11 @@ type BackupPart struct {
 }
 
 type BackupRequest struct {
+	// Adapter is the storage driver that contains the completed archive. This
+	// can differ from the driver that started the backup when a remote upload
+	// falls back to the node's local backup directory.
+	Adapter      string       `json:"adapter"`
+	FallbackToLocal bool      `json:"fallback_to_local,omitempty"`
 	Checksum     string       `json:"checksum"`
 	ChecksumType string       `json:"checksum_type"`
 	Size         int64        `json:"size"`

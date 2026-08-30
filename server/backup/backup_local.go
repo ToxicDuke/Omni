@@ -84,6 +84,7 @@ func (b *LocalBackup) Generate(ctx context.Context, fsys *filesystem.Filesystem,
 	if err != nil {
 		return nil, errors.WrapIf(err, "backup: failed to get archive details for local backup")
 	}
+	ad.Adapter = LocalBackupAdapter
 	return ad, nil
 }
 

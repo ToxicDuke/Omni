@@ -89,10 +89,12 @@ func (s *Server) Backup(b backup.BackupInterface) error {
 		return errors.WrapIf(err, "backup: error while generating server backup")
 	}
 
-	// Try to notify the panel about the status of this backup. If for some reason this request
-	// fails, delete the archive from the daemon and return that error up the chain to the caller.
+	// Try to notify the panel about the status of this backup. A backup retained
+	// by the S3 fallback must remain on the node even if this notification fails.
 	if notifyError := s.notifyPanelOfBackup(b.Identifier(), ad, true); notifyError != nil {
-		_ = b.Remove()
+		if !ad.RetainedLocally {
+			_ = b.Remove()
+		}
 
 		s.Log().WithField("error", notifyError).Info("failed to notify panel of successful backup state")
 		return err

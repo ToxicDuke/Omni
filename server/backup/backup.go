@@ -198,19 +198,23 @@ func (b *Backup) log() *log.Entry {
 }
 
 type ArchiveDetails struct {
-	Checksum     string              `json:"checksum"`
-	ChecksumType string              `json:"checksum_type"`
-	Size         int64               `json:"size"`
-	Parts        []remote.BackupPart `json:"parts"`
+	Adapter         AdapterType         `json:"adapter"`
+	RetainedLocally bool                `json:"-"`
+	Checksum        string              `json:"checksum"`
+	ChecksumType    string              `json:"checksum_type"`
+	Size            int64               `json:"size"`
+	Parts           []remote.BackupPart `json:"parts"`
 }
 
 // ToRequest returns a request object.
 func (ad *ArchiveDetails) ToRequest(successful bool) remote.BackupRequest {
 	return remote.BackupRequest{
-		Checksum:     ad.Checksum,
-		ChecksumType: ad.ChecksumType,
-		Size:         ad.Size,
-		Successful:   successful,
-		Parts:        ad.Parts,
+		Adapter:         string(ad.Adapter),
+		FallbackToLocal: ad.RetainedLocally,
+		Checksum:        ad.Checksum,
+		ChecksumType:    ad.ChecksumType,
+		Size:            ad.Size,
+		Successful:      successful,
+		Parts:           ad.Parts,
 	}
 }
