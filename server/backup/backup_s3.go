@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -208,7 +209,16 @@ func newS3FileUploader(path string, logger *log.Entry) *s3FileUploader {
 		// a 5GB file. This assumes at worst a 10Mbps connection for uploading. While technically
 		// you could go slower we're targeting mostly hosted servers that should have 100Mbps
 		// connections anyways.
-		client: &http.Client{Timeout: time.Hour * 2},
+		client: &http.Client{
+			Timeout: time.Hour * 2,
+			// Garage uploads over this endpoint stall under HTTP/2. Keep multipart
+			// transfers on HTTP/1.1, which also gives each concurrent part its own
+			// TCP connection instead of multiplexing them onto one stalled stream.
+			Transport: &http.Transport{
+				ForceAttemptHTTP2: false,
+				TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{},
+			},
+		},
 		logger: logger,
 	}
 }
