@@ -102,12 +102,8 @@ func (b *Backup) normalizedIdentifier() (string, error) {
 }
 
 func (b *Backup) validateIdentifier() error {
-	identifier, err := b.normalizedIdentifier()
-	if err != nil {
-		return err
-	}
-	b.Uuid = identifier
-	return nil
+	_, err := b.normalizedIdentifier()
+	return err
 }
 
 // Path returns the path for this specific backup.
