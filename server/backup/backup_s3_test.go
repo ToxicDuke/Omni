@@ -57,7 +57,10 @@ func TestS3GenerateRetainsArchiveAndFallsBackToLocalWhenUploadIsUnavailable(t *t
 	if err := os.WriteFile(filepath.Join(serverDir, "file.txt"), []byte("server data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config.Set(&config.Configuration{System: config.SystemConfiguration{BackupDirectory: backupDir}})
+	config.Set(&config.Configuration{
+		AuthenticationToken: "test-token",
+		System:              config.SystemConfiguration{BackupDirectory: backupDir},
+	})
 
 	fsys, err := filesystem.New(serverDir, 0, nil)
 	if err != nil {
