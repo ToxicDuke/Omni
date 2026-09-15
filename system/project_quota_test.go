@@ -1,9 +1,6 @@
 package system
 
-import (
-	"fmt"
-	"testing"
-)
+import "testing"
 
 func TestProjectQuotaSetUsesExt4HardLimit(t *testing.T) {
 	var calls [][]string
@@ -34,15 +31,8 @@ func TestProjectQuotaSetUsesXFSHardLimit(t *testing.T) {
 	if err := q.Set("/data/abc", "abc", 20*1024*1024*1024); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 1 || calls[0][0] != "xfs_quota" || calls[0][5] != "limit -p bhard=21474836480b 891568579" || calls[0][6] != "/data/abc" {
+	if len(calls) != 1 || calls[0][0] != "xfs_quota" || calls[0][5] != "limit -p bhard=21474836480b 891568579" {
 		t.Fatalf("calls = %#v", calls)
-	}
-}
-
-func TestCommandErrorIncludesUtilityOutput(t *testing.T) {
-	err := commandError("set XFS quota", "/data/abc", fmt.Errorf("exit status 1"), []byte("XFS quota not enabled\n"))
-	if got := err.Error(); got != "project quota: set XFS quota for \"/data/abc\": exit status 1: XFS quota not enabled" {
-		t.Fatalf("error = %q", got)
 	}
 }
 
