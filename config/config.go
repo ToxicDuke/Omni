@@ -394,6 +394,10 @@ type Configuration struct {
 	// additional origins.
 	AllowedOrigins []string `json:"allowed_origins" yaml:"allowed_origins"`
 
+	// LocalAllowedOrigins are node-managed origins that must not be replaced by
+	// configuration payloads sent by the Panel.
+	LocalAllowedOrigins []string `json:"-" yaml:"local_allowed_origins"`
+
 	// AllowCORSPrivateNetwork sets the `Access-Control-Request-Private-Network` header which
 	// allows client browsers to make requests to internal IP addresses over HTTP.  This setting
 	// is only required by users running Wings without SSL certificates and using internal IP
@@ -402,6 +406,19 @@ type Configuration struct {
 
 	// IgnorePanelConfigUpdates causes confiuration updates that are sent by the panel to be ignored.
 	IgnorePanelConfigUpdates bool `json:"ignore_panel_config_updates" yaml:"ignore_panel_config_updates"`
+}
+
+// EffectiveAllowedOrigins returns origins from the Panel configuration plus
+// node-managed origins pinned in the process environment. Environment origins
+// survive full configuration replacement initiated by the Panel.
+func (c *Configuration) EffectiveAllowedOrigins() []string {
+	origins := append(append([]string(nil), c.AllowedOrigins...), c.LocalAllowedOrigins...)
+	for _, origin := range strings.Split(os.Getenv("OMNI_LOCAL_ALLOWED_ORIGINS"), ",") {
+		if origin = strings.TrimSpace(origin); origin != "" {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
 }
 
 // NewAtPath creates a new struct and set the path where it should be stored.

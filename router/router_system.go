@@ -139,9 +139,11 @@ func postUpdateConfiguration(c *gin.Context) {
 		return
 	}
 
+	localAllowedOrigins := append([]string(nil), cfg.LocalAllowedOrigins...)
 	if err := c.BindJSON(&cfg); err != nil {
 		return
 	}
+	cfg.LocalAllowedOrigins = localAllowedOrigins
 
 	// Keep the SSL certificates the same since the Panel will send through Lets Encrypt
 	// default locations. However, if we picked a different location manually we don't

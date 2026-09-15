@@ -53,3 +53,37 @@ func TestPostUpdateConfigurationRotatesCredentials(t *testing.T) {
 		t.Fatal("expected client credentials to be rotated")
 	}
 }
+
+func TestPostUpdateConfigurationKeepsLocalAllowedOrigins(t *testing.T) {
+	t.Setenv("WINGS_TOKEN_ID", "")
+	t.Setenv("WINGS_TOKEN", "")
+
+	cfg, err := config.NewAtPath(filepath.Join(t.TempDir(), "config.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AuthenticationTokenId = "node-id"
+	cfg.AuthenticationToken = "node-token"
+	cfg.LocalAllowedOrigins = []string{"https://panel-backup.example.com"}
+	if err := cfg.ResolveToken(false); err != nil {
+		t.Fatal(err)
+	}
+	config.Set(cfg)
+
+	manager := server.NewEmptyManager(backupTestRemoteClient{credentials: make(chan [2]string, 1)})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set("manager", manager)
+	c.Request = httptest.NewRequest("POST", "/api/update", strings.NewReader(`{"token_id":"node-id","token":"node-token","allowed_origins":[]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	postUpdateConfiguration(c)
+
+	if recorder.Code != 200 {
+		t.Fatalf("expected successful update, got status %d", recorder.Code)
+	}
+	got := config.Get().LocalAllowedOrigins
+	if len(got) != 1 || got[0] != "https://panel-backup.example.com" {
+		t.Fatalf("expected local allowed origin to survive Panel update, got %#v", got)
+	}
+}

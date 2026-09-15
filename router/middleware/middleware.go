@@ -92,7 +92,7 @@ func CaptureErrors() gin.HandlerFunc {
 // the requests.
 func SetAccessControlHeaders() gin.HandlerFunc {
 	cfg := config.Get()
-	origins := cfg.AllowedOrigins
+	origins := cfg.EffectiveAllowedOrigins()
 	location := cfg.PanelLocation
 	allowPrivateNetwork := cfg.AllowCORSPrivateNetwork
 

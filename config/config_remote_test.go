@@ -72,3 +72,12 @@ func TestPanelEndpointsRejectInvalidConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestEffectiveAllowedOriginsIncludesNodeManagedEnvironment(t *testing.T) {
+	t.Setenv("OMNI_LOCAL_ALLOWED_ORIGINS", "https://panel-backup.example.com, https://panel-dr.example.com")
+	c := Configuration{AllowedOrigins: []string{"https://panel.example.com"}}
+	got := c.EffectiveAllowedOrigins()
+	if len(got) != 3 || got[0] != "https://panel.example.com" || got[1] != "https://panel-backup.example.com" || got[2] != "https://panel-dr.example.com" {
+		t.Fatalf("unexpected effective origins: %#v", got)
+	}
+}
