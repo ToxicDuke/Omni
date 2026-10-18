@@ -209,6 +209,7 @@ func (m *Manager) InitServer(data remote.ServerConfigurationResponse) (*Server, 
 		Allocations: s.cfg.Allocations,
 		Limits:      s.cfg.Build,
 		Labels:      s.cfg.Labels,
+		BindIPAlias: s.cfg.Container.BindIPAlias,
 	}
 
 	envCfg := environment.NewConfiguration(settings, s.GetEnvironmentVariables())

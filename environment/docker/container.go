@@ -204,7 +204,22 @@ func (e *Environment) Create() error {
 	}
 
 	networkMode := container.NetworkMode(cfg.Docker.Network.Mode)
-	if a.ForceOutgoingIP {
+	var networkingConfig *network.NetworkingConfig
+	if alias := strings.TrimSpace(e.Configuration.BindIPAlias()); alias != "" && alias != a.DefaultMapping.Ip {
+		e.log().WithField("bind_ip_alias", alias).Info("environment/docker: configuring bind IP alias network")
+		definition, err := e.ensureBindIPNetwork(ctx, alias, a.DefaultMapping.Ip)
+		if err != nil {
+			return errors.WrapIf(err, "environment/docker: could not configure bind IP alias network")
+		}
+
+		networkMode = container.NetworkMode(definition.Name)
+		networkingConfig = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			definition.Name: {
+				IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: definition.Address},
+			},
+		}}
+	}
+	if a.ForceOutgoingIP && networkingConfig == nil {
 		e.log().Debug("environment/docker: forcing outgoing IP address")
 		networkName := "ip-" + strings.ReplaceAll(strings.ReplaceAll(a.DefaultMapping.Ip, ".", "-"), ":", "-")
 		networkMode = container.NetworkMode(networkName)
@@ -268,7 +283,7 @@ func (e *Environment) Create() error {
 		UsernsMode:  container.UsernsMode(cfg.Docker.UsernsMode),
 	}
 
-	if _, err := e.client.ContainerCreate(ctx, conf, hostConf, nil, nil, e.Id); err != nil {
+	if _, err := e.client.ContainerCreate(ctx, conf, hostConf, networkingConfig, nil, e.Id); err != nil {
 		return errors.Wrap(err, "environment/docker: failed to create container")
 	}
 

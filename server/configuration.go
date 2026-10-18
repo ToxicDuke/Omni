@@ -58,6 +58,10 @@ type Configuration struct {
 	Container struct {
 		// Defines the Docker image that will be used for this server
 		Image string `json:"image,omitempty"`
+
+		// BindIPAlias is an optional browser-facing IPv4 address which must exist
+		// inside the container for legacy game SDKs such as SteamGameServer_Init.
+		BindIPAlias string `json:"bind_ip_alias,omitempty"`
 	} `json:"container,omitempty"`
 }
 

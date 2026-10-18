@@ -9,6 +9,16 @@ type Settings struct {
 	Allocations Allocations
 	Limits      Limits
 	Labels      map[string]string
+	BindIPAlias string
+}
+
+// BindIPAlias returns an optional IPv4 address which should be assigned to the
+// container's Docker interface for game SDK socket binding.
+func (c *Configuration) BindIPAlias() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return c.settings.BindIPAlias
 }
 
 // Defines the actual configuration struct for the environment with all of the settings
