@@ -60,6 +60,12 @@ go build ./...
 go test ./...
 ```
 
+Published releases can use a staged binary rollout: verified CI artifacts,
+the fixed canary, and manual approval before updating the approved fleet.
+See [CI/CD setup and rollback](docs/operations/ci-cd.md) for the required GitHub
+environments, scoped credentials and explicit node inventory. No deployment is
+enabled merely by adding the workflow files.
+
 ## Docker
 
 The `develop` image is published for both amd64 and arm64 nodes. Existing

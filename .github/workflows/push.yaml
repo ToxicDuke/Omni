@@ -1,6 +1,7 @@
-name: Push
+name: CI
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches:
@@ -13,11 +14,15 @@ jobs:
   security:
     name: Go vulnerability scan
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
       - name: Code checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
@@ -56,6 +61,7 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +74,9 @@ jobs:
     steps:
       - name: Code checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
@@ -79,6 +88,11 @@ jobs:
           CGO_ENABLED: 0
         run: |
           go mod download
+          go mod verify
+
+      - name: Deployment guard and rollback tests
+        if: ${{ matrix.goarch == 'amd64' }}
+        run: python3 -m unittest discover -s deploy -p 'test_*.py' -v
 
       - name: Build
         env:
@@ -87,9 +101,16 @@ jobs:
           CGO_ENABLED: 0
           SRC_PATH: github.com/pterodactyl/wings
         run: |
-          go build -v -trimpath -ldflags="-s -w -X ${SRC_PATH}/system.Version=dev-${GITHUB_SHA:0:7}" -o dist/omni ${SRC_PATH}
-          go build -v -trimpath -ldflags="-X ${SRC_PATH}/system.Version=dev-${GITHUB_SHA:0:7}" -o dist/omni_debug ${SRC_PATH}
+          version="dev-${GITHUB_SHA:0:7}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+.-][A-Za-z0-9.-]+)?$ ]] || exit 1
+          fi
+          go build -v -trimpath -ldflags="-s -w -X ${SRC_PATH}/system.Version=${version}" -o dist/omni ${SRC_PATH}
+          go build -v -trimpath -ldflags="-X ${SRC_PATH}/system.Version=${version}" -o dist/omni_debug ${SRC_PATH}
           chmod 755 dist/*
+          printf '%s\n' "$GITHUB_SHA" > dist/REVISION
+          (cd dist && sha256sum omni > SHA256SUMS)
 
       - name: go test
         if: ${{ matrix.goarch == 'amd64' }}
@@ -107,10 +128,14 @@ jobs:
 
       - name: Upload Release Artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        if: ${{ github.ref == 'refs/heads/develop' || github.event_name == 'pull_request' }}
         with:
           name: omni_linux_${{ matrix.goarch }}
-          path: dist/omni
+          path: |
+            dist/omni
+            dist/SHA256SUMS
+            dist/REVISION
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload Debug Artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
