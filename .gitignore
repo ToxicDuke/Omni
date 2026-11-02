@@ -35,9 +35,6 @@
 # Go Coverage tool
 /coverage.out
 
-# Deployment helper test bytecode.
-/deploy/__pycache__/
-
 # The built executable
 wings
 wings.exe
