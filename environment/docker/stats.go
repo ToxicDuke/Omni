@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"math"
+	"strings"
 	"time"
 
 	"emperror.dev/errors"
@@ -16,18 +17,27 @@ import (
 // Uptime returns the current uptime of the container in milliseconds. If the
 // container is not currently running this will return 0.
 func (e *Environment) Uptime(ctx context.Context) (int64, error) {
+	uptime, _, err := e.uptimeAndBootID(ctx)
+	return uptime, err
+}
+
+func (e *Environment) uptimeAndBootID(ctx context.Context) (int64, string, error) {
 	ins, err := e.ContainerInspect(ctx)
 	if err != nil {
-		return 0, errors.Wrap(err, "environment: could not inspect container")
+		return 0, "", errors.Wrap(err, "environment: could not inspect container")
 	}
 	if !ins.State.Running {
-		return 0, nil
+		return 0, "", nil
 	}
 	started, err := time.Parse(time.RFC3339, ins.State.StartedAt)
 	if err != nil {
-		return 0, errors.Wrap(err, "environment: failed to parse container start time")
+		return 0, "", errors.Wrap(err, "environment: failed to parse container start time")
 	}
-	return time.Since(started).Milliseconds(), nil
+	return time.Since(started).Milliseconds(), dockerBootID(ins.ID, started), nil
+}
+
+func dockerBootID(id string, started time.Time) string {
+	return id + "@" + started.UTC().Format(time.RFC3339Nano)
 }
 
 // Attach to the instance and then automatically emit an event whenever the resource usage for the
@@ -46,7 +56,7 @@ func (e *Environment) pollResources(ctx context.Context) error {
 	}
 	defer stats.Body.Close()
 
-	uptime, err := e.Uptime(ctx)
+	uptime, bootID, err := e.uptimeAndBootID(ctx)
 	if err != nil {
 		e.log().WithField("error", err).Warn("failed to calculate container uptime")
 	}
@@ -83,7 +93,9 @@ func (e *Environment) pollResources(ctx context.Context) error {
 				MemoryLimit: v.MemoryStats.Limit,
 				CpuAbsolute: calculateDockerAbsoluteCpu(v.PreCPUStats, v.CPUStats),
 				Network:     environment.NetworkStats{},
+				BootID:      bootID,
 			}
+			st.DiskReadBytes, st.DiskWriteBytes = calculateDockerBlockIO(v.BlkioStats)
 
 			for _, nw := range v.Networks {
 				st.Network.RxBytes += nw.RxBytes
@@ -93,6 +105,25 @@ func (e *Environment) pollResources(ctx context.Context) error {
 			e.Events().Publish(environment.ResourceEvent, st)
 		}
 	}
+}
+
+func calculateDockerBlockIO(stats container.BlkioStats) (read, write *uint64) {
+	for _, entry := range stats.IoServiceBytesRecursive {
+		var target **uint64
+		switch strings.ToLower(entry.Op) {
+		case "read":
+			target = &read
+		case "write":
+			target = &write
+		default:
+			continue
+		}
+		if *target == nil {
+			*target = new(uint64)
+		}
+		**target += entry.Value
+	}
+	return
 }
 
 // The "docker stats" CLI call does not return the same value as the [container.MemoryStats].Usage

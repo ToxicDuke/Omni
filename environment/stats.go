@@ -22,6 +22,11 @@ type Stats struct {
 
 	// The current uptime of the container, in milliseconds.
 	Uptime int64 `json:"uptime"`
+
+	// Optional cumulative block I/O counters; absent when the runtime does not report them.
+	DiskReadBytes  *uint64 `json:"disk_read_bytes,omitempty"`
+	DiskWriteBytes *uint64 `json:"disk_write_bytes,omitempty"`
+	BootID         string  `json:"boot_id,omitempty"`
 }
 
 type NetworkStats struct {
